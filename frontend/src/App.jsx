@@ -31,7 +31,7 @@ const SECTION_ALIASES = {
   facts: ["fact", "facts"], background: ["background", "case background"],
   issue: ["issue", "issues", "dispute", "disputed issue"],
   contradiction: ["contradiction", "contradictions", "conflict", "conflicts", "discrepancy", "discrepancies"],
-  chronology: ["chronology", "timeline", "events"],
+  chronology: ["chronology", "timeline", "events", "dates"],
   evidence: ["evidence", "documentary", "documentary evidence", "evidence assessment"],
   parties: ["party", "parties", "applicant", "respondent", "participants"],
   law: ["law", "legal", "legal provision", "legal provisions", "act", "section", "statute"],
@@ -120,7 +120,7 @@ export default function App() {
   const facts = useMemo(() => items.filter((x) => matchesSection(x, ["fact", "background"])), [items]);
   const issues = useMemo(() => items.filter((x) => matchesSection(x, ["issue", "dispute"])), [items]);
   const contradictions = useMemo(() => items.filter((x) => matchesSection(x, ["contradiction", "conflict", "discrepancy"])), [items]);
-  const chronology = useMemo(() => items.filter((x) => matchesSection(x, ["chronology", "timeline"])), [items]);
+  const chronology = useMemo(() => items.filter((x) => matchesSection(x, ["chronology", "timeline","dates"])), [items]);
   const evidence = useMemo(() => items.filter((x) => matchesSection(x, ["evidence", "documentary"])), [items]);
   const parties = useMemo(() => items.filter((x) => matchesSection(x, ["parties", "applicant", "respondent"])), [items]);
   const law = useMemo(() => items.filter((x) => matchesSection(x, ["law", "legal provision", "act", "section"])), [items]);
