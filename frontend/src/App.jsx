@@ -157,6 +157,76 @@ function FindingCard({ item, onCitation, activeCitation, caseId }) {
   );
 }
 
+// Split a combined party finding into display-only Applicant and Respondent cards.
+// The original finding and citation records remain unchanged.
+function splitPartyContent(content) {
+  const text = String(content || "").trim();
+  const markerRegex = /\b(applicant|respondent)\s*:\s*/gi;
+  const markers = [...text.matchAll(markerRegex)];
+  const result = {};
+
+  markers.forEach((match, index) => {
+    const role = match[1].toLowerCase();
+    const start = match.index + match[0].length;
+    const end = index + 1 < markers.length ? markers[index + 1].index : text.length;
+    const description = text.slice(start, end).trim().replace(/[;\s]+$/, "");
+    if (description && !result[role]) result[role] = description;
+  });
+
+  return result;
+}
+
+function PartyFindingCards({ list, onCitation, activeCitation, caseId }) {
+  if (!list.length) {
+    return <div className="empty-panel"><strong>Nothing to display yet</strong><p>No additional party-related findings were returned.</p></div>;
+  }
+
+  return (
+    <div className="party-analysis-list">
+      {list.map((item) => {
+        const split = splitPartyContent(item.content);
+        const roles = [
+          ["applicant", "Applicant"],
+          ["respondent", "Respondent"],
+        ].filter(([key]) => split[key]);
+
+        // If the finding is not explicitly labelled by party, preserve it intact.
+        if (!roles.length) {
+          return (
+            <FindingCard
+              key={item.id}
+              item={item}
+              onCitation={onCitation}
+              activeCitation={activeCitation}
+              caseId={caseId}
+            />
+          );
+        }
+
+        return (
+          <div className="party-analysis-group" key={item.id}>
+            {roles.map(([key, label]) => (
+              <article className={`finding-card party-analysis-card party-${key}`} key={`${item.id}-${key}`}>
+                <div className="finding-meta">
+                  <span className="eyebrow">{label}</span>
+                  <span className="muted">Paragraph #{(item.item_order ?? 0) + 1}</span>
+                </div>
+                <p className="finding-content">{split[key]}</p>
+                <CitationChips
+                  citations={item.citations || []}
+                  onOpen={onCitation}
+                  activeCitation={activeCitation}
+                  caseId={caseId}
+                />
+              </article>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function Metric({ label, value, hint }) {
   return (
     <div className="metric-card">
@@ -671,7 +741,7 @@ export default function App() {
                     </>
                   )}
                   {activeTab === "issues" && <><div className="tab-intro"><h3>Issues for consideration</h3><p>Questions and disputed points identified from the case record.</p></div>{renderFindings(issues, "No separately classified issues were returned by the analysis.")}{contradictions.length > 0 && <div className="overview-block"><h3>Related contradictions</h3>{renderFindings(contradictions, "No contradictions identified.")}</div>}</>}
-                  {activeTab === "parties" && <><div className="tab-intro"><h3>Parties and participants</h3><p>Parties named in the case metadata and supporting analysis.</p></div><div className="party-grid"><div className="party-card"><span>APPLICANT</span><strong>{selected.applicant || "Not specified"}</strong></div><div className="party-card"><span>RESPONDENT</span><strong>{selected.respondent || "Not specified"}</strong></div></div>{renderFindings(parties, "No additional party-related findings were returned.")}</>}
+                  {activeTab === "parties" && <><div className="tab-intro"><h3>Parties and participants</h3><p>Applicant and respondent positions are displayed separately, with their source citations retained.</p></div><div className="party-grid"><div className="party-card"><span>APPLICANT</span><strong>{selected.applicant || "Not specified"}</strong></div><div className="party-card"><span>RESPONDENT</span><strong>{selected.respondent || "Not specified"}</strong></div></div><PartyFindingCards list={parties} onCitation={openCitation} activeCitation={citation} caseId={selected?.id} /></>}
                   {activeTab === "evidence" && <><div className="tab-intro"><h3>Evidence assessment</h3><p>Documentary evidence and its relevance to the disputed facts.</p></div>{renderFindings(evidence.length ? evidence : items.filter((x) => x.citations?.length), "No evidence assessment was returned. Review the Sources tab for all available citations.")}</>}
                   {activeTab === "chronology" && <><div className="tab-intro"><h3>Case chronology</h3><p>Date-ordered events extracted from the documents. Each event should have source support.</p></div>{chronology.length ? <div className="timeline">{[...chronology].sort((a, b) => String(a.event_date || "").localeCompare(String(b.event_date || ""))).map((item, index) => <article className="timeline-item" key={item.id}><div className="timeline-point">{index + 1}</div><div className="timeline-content"><time>{item.event_date || "Date not specified"}</time><p>{item.content}</p><CitationChips citations={item.citations || []} onOpen={openCitation} activeCitation={citation} caseId={selected?.id} /></div></article>)}</div> : <div className="empty-panel"><strong>No chronology events available</strong><p>Run Analyse Case after processing the PDFs. Only explicitly dated, source-supported events are displayed here.</p></div>}</>}
                   {activeTab === "law" && <><div className="tab-intro"><h3>Legal provisions</h3><p>Acts, sections and legal references mentioned in the case documents.</p></div><div className="case-law-meta"><span><b>Act:</b> {selected.act || "Not specified"}</span><span><b>Sections:</b> {selected.sections || "Not specified"}</span></div>{renderFindings(law, "No separately classified legal provisions were returned by the analysis.")}</>}
