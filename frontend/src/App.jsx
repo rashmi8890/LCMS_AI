@@ -57,21 +57,86 @@ function matchesSection(item, terms) {
 
 function CitationChips({ citations = [], onOpen, activeCitation }) {
   if (!citations.length) return <span className="no-citation">No source linked</span>;
-  return (
-    <div className="citation-chips">
-      {citations.map((citation, index) => (
-        <button
-          type="button"
-          className={`citation-chip ${String(activeCitation?.id) === String(citation.id) ? "active" : ""}`}
-          key={citation.id || `${citation.document_id}-${index}`}
-          onClick={() => onOpen(citation)}
-        >
-          <strong>[{index + 1}] {citation.document_name || "Source document"}</strong>
-          <span>Page {citation.page_number ?? "—"} · {(citation.highlights || []).length} highlight(s)</span>
-        </button>
-      ))}
-    </div>
-  );
+
+  // Group citations only inside this one FindingCard (one analysis item).
+  // Citations from different findings/issues are never combined here.
+  const documentGroups = new Map();
+  const displayEntries = [];
+
+  citations.forEach((source, sourceIndex) => {
+    const hasDocumentId = source.document_id !== null && source.document_id !== undefined;
+    const key = hasDocumentId ? String(source.document_id) : `citation-${source.id ?? sourceIndex}`;
+
+    if (!documentGroups.has(key)) {
+      const entry = {
+        ...source,
+        relatedCitations: [source],
+        pageNumbers: source.page_number ? [Number(source.page_number)] : [],
+        highlights: (source.highlights || []).map((highlight) => ({
+          ...highlight,
+          page_number: Number(highlight.page_number || source.page_number || 1),
+        })),
+        _sourceIndexes: [sourceIndex],
+      };
+      documentGroups.set(key, entry);
+      displayEntries.push(entry);
+      return;
+    }
+
+    const entry = documentGroups.get(key);
+    entry.relatedCitations.push(source);
+    entry._sourceIndexes.push(sourceIndex);
+
+    const page = Number(source.page_number);
+    if (Number.isInteger(page) && page > 0 && !entry.pageNumbers.includes(page)) {
+      entry.pageNumbers.push(page);
+    }
+
+    (source.highlights || []).forEach((highlight) => {
+      entry.highlights.push({
+        ...highlight,
+        page_number: Number(highlight.page_number || source.page_number || 1),
+      });
+    });
+  });
+
+  // Keep single citations unchanged. Only repeated citations for the same
+  // document within this analysis item become one combined chip.
+  const chips = displayEntries.map((entry, index) => {
+    const grouped = entry.relatedCitations.length > 1;
+    const pageNumbers = [...new Set(entry.pageNumbers)].sort((a, b) => a - b);
+    const citationIds = entry.relatedCitations.map((item) => String(item.id));
+    const isActive = citationIds.includes(String(activeCitation?.id)) ||
+      (grouped && String(activeCitation?.document_id) === String(entry.document_id));
+
+    const chipCitation = grouped
+      ? {
+          ...entry,
+          page_number: pageNumbers[0] || entry.page_number,
+          pageNumbers,
+          relatedCitations: entry.relatedCitations,
+          highlights: entry.highlights,
+        }
+      : entry.relatedCitations[0];
+
+    const label = grouped
+      ? `Pages ${pageNumbers.join(", ") || "—"} · ${entry.relatedCitations.length} citations · ${entry.highlights.length} highlights`
+      : `Page ${entry.page_number ?? "—"} · ${(entry.highlights || []).length} highlight(s)`;
+
+    return (
+      <button
+        type="button"
+        className={`citation-chip ${isActive ? "active" : ""}`}
+        key={entry.document_id ?? entry.id ?? index}
+        onClick={() => onOpen(chipCitation)}
+      >
+        <strong>[{index + 1}] {entry.document_name || "Source document"}</strong>
+        <span>{label}</span>
+      </button>
+    );
+  });
+
+  return <div className="citation-chips">{chips}</div>;
 }
 
 function FindingCard({ item, onCitation, activeCitation, caseId }) {
