@@ -38,7 +38,6 @@ const SECTION_ALIASES = {
   law: ["law", "legal", "legal provision", "legal provisions", "act", "section", "statute"],
   missing: ["missing information", "missing", "unresolved", "unresolved facts"],
   summary: ["summary", "executive summary"],
-  suggested: ["suggested action", "suggested actions", "recommendation", "recommendations"],
   analysis: ["analysis", "analytical assessment"],
 };
 
@@ -289,7 +288,12 @@ export default function App() {
   const [isPreviewFullscreen, setIsPreviewFullscreen] = useState(false);
   const [standalonePdfPreview, setStandalonePdfPreview] = useState(null);
 
-  const facts = useMemo(() => items.filter((x) => matchesSection(x, ["fact", "background"])), [items]);
+  // Material facts only
+  const facts = useMemo(() => items.filter((x) => matchesSection(x, ["facts"])),[items]);
+// Case background and procedural history only
+  const background = useMemo(() => items.filter((x) => matchesSection(x, ["background"])),[items]);
+// Analytical assessment
+  const analysisFindings = useMemo(() => items.filter((x) => matchesSection(x, ["analysis"])),[items]);
   const issues = useMemo(() => items.filter((x) => matchesSection(x, ["issue", "dispute"])), [items]);
   const contradictions = useMemo(() => items.filter((x) => matchesSection(x, ["contradiction", "conflict", "discrepancy"])), [items]);
   const chronology = useMemo(() => items.filter((x) => matchesSection(x, ["chronology", "timeline","dates"])), [items]);
@@ -734,10 +738,16 @@ export default function App() {
                         <Metric label="CONTRADICTIONS" value={contradictions.length} hint="Conflicting records" />
                         <Metric label="SOURCE LINKS" value={allCitations.length} hint="Traceable citations" />
                       </div>
-                      <div className="overview-block"><h3>Executive Summary</h3>{renderFindings(items.filter((x) => matchesSection(x, ["summary", "executive"])).slice(0, 2), "The analysis has not returned a separate executive summary.")}</div>
-                      <div className="overview-block"><h3>Case Background</h3>{renderFindings(facts.slice(0, 3), "No separately classified background facts were returned.")}</div>
-                      <div className="overview-block"><h3>Unresolved Facts</h3>{renderFindings(items.filter((x) => matchesSection(x, ["missing", "unresolved"])), "No unresolved facts were identified in the returned analysis. This does not mean every fact has been established.")}</div>
-                      {/* {contradictions.length > 0 && <div className="overview-block"><h3>Key Contradictions</h3>{renderFindings(contradictions.slice(0, 3), "No contradictions found.")}</div>} */}
+                      {/* Executive Summary */}
+                      <div className="overview-block"><h3>Executive Summary</h3>{renderFindings(items.filter((x) => matchesSection(x, ["summary"])),"The analysis has not returned a separate executive summary.")}</div>
+                      {/* Case Background */}
+                      <div className="overview-block"><h3>Case Background</h3>{renderFindings(background,"No separately classified case background was returned.")}</div>
+                      {/* Material Facts */}
+                      <div className="overview-block"><h3>Facts</h3>{renderFindings(facts, "No separately classified material facts were returned.")}</div>
+                      {/* Analytical Assessment */}
+                      <div className="overview-block"><h3>Analysis</h3>{renderFindings(analysisFindings, "No separate analytical assessment was returned.")}</div>
+                      {/* Unresolved Facts */}
+                      <div className="overview-block"><h3>Unresolved Facts</h3>{renderFindings(items.filter((x) => matchesSection(x, ["missing"])),"No unresolved facts were identified in the returned analysis. This does not mean every fact has been established.")}</div>
                     </>
                   )}
                   {activeTab === "issues" && <><div className="tab-intro"><h3>Issues for consideration</h3><p>Questions and disputed points identified from the case record.</p></div>{renderFindings(issues, "No separately classified issues were returned by the analysis.")}{contradictions.length > 0 && <div className="overview-block"><h3>Related contradictions</h3>{renderFindings(contradictions, "No contradictions identified.")}</div>}</>}
