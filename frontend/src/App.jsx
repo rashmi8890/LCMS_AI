@@ -27,9 +27,31 @@ const TAB_CONFIG = [
   { id: "sources", label: "Sources" },
 ];
 
+const SECTION_ALIASES = {
+  facts: ["fact", "facts"], background: ["background", "case background"],
+  issue: ["issue", "issues", "dispute", "disputed issue"],
+  contradiction: ["contradiction", "contradictions", "conflict", "conflicts", "discrepancy", "discrepancies"],
+  chronology: ["chronology", "timeline", "events"],
+  evidence: ["evidence", "documentary", "documentary evidence", "evidence assessment"],
+  parties: ["party", "parties", "applicant", "respondent", "participants"],
+  law: ["law", "legal", "legal provision", "legal provisions", "act", "section", "statute"],
+  missing: ["missing information", "missing", "unresolved", "unresolved facts"],
+  summary: ["summary", "executive summary"],
+  suggested: ["suggested action", "suggested actions", "recommendation", "recommendations"],
+  analysis: ["analysis", "analytical assessment"],
+};
+
+function normalizeSection(value) {
+  return String(value || "").trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+}
+
 function matchesSection(item, terms) {
-  const section = String(item.section || "").toLowerCase();
-  return terms.some((term) => section.includes(term));
+  const section = normalizeSection(item.section);
+  const accepted = new Set(terms.flatMap((term) => {
+    const key = normalizeSection(term);
+    return SECTION_ALIASES[key] || [key];
+  }));
+  return accepted.has(section);
 }
 
 function CitationChips({ citations = [], onOpen, activeCitation }) {
