@@ -99,7 +99,7 @@ def generate_analysis(db, case_id: int):
         '"quote":"Exact source quotation","note":"Relevance"}]}]}\n'
         "Every item must have all four fields. Use only these exact section "
         "names: Executive Summary, Case Background, Issues, " #Facts
-        "Contradictions, Parties, Evidence, Law, " #Missing Information,
+        "Contradictions, Parties, Unresolved Facts, Evidence, Law, " #Missing Information,
         # "Analysis," 
         " Chronology, Dates. Never change the schema.\n\n"
 
@@ -141,10 +141,6 @@ def generate_analysis(db, case_id: int):
         "and the precise inconsistency. Do not confuse missing information "
         "with contradiction.\n"
        
-        # "Unresolved Facts: Identify material factual questions that remain "
-        # "unanswered, disputed, unverified, or unsupported by sufficient "
-        # "evidence in the available case record. Explain what is known, what "
-        # "remains uncertain, and which parties or documents are relevant. "
         # "Missing Information: Identify specific material information, "
         # "documents, records, or explanations necessary to resolve those "
         # "questions but not available in the case record. Do not treat absence "
@@ -156,6 +152,11 @@ def generate_analysis(db, case_id: int):
         "Convert all dates to a unified, standard format (e.g., YYYY-MM-DD or DD Month YYYY). If a specific day is missing, use 'Month YYYY'."
         "Chronologically sort the events from the earliest date to the most recent date. Do not skip any intermediate procedural steps mentioned."
         "Provide a brief analysis of the progression (e.g., gaps in time, speed of resolution, or key turning points).\n"
+
+        "Unresolved Facts: Identify material factual questions that remain "
+        "unanswered, disputed, unverified, or unsupported by sufficient "
+        "evidence in the available case record. Explain what is known, what "
+        "remains uncertain, and which parties or documents are relevant. \n"
 
         "Law: Only explicitly identified Acts, rules, sections, regulations "
         "or legal principles. Never infer applicable law or classify facts "
