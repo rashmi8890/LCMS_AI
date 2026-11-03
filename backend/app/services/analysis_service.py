@@ -2,7 +2,6 @@ import re
 from ..models import Case, Chunk
 from ..services.llm_service import ask_json
 
-
 def retrieve_case_chunks(db, case_id: int, query: str = "", limit: int | None = None):
     terms = [t.lower().strip(".,:;()[]{}") for t in query.split() if len(t) > 2]
     rows = (
@@ -23,10 +22,8 @@ def retrieve_case_chunks(db, case_id: int, query: str = "", limit: int | None = 
     ordered = [r for _, r in sorted(scored, key=lambda x: x[0], reverse=True)]
     return ordered[:limit] if limit else ordered
 
-
 def _normalise_for_dedupe(value: str) -> str:
     return re.sub(r"\W+", " ", (value or "").lower()).strip()
-
 
 def _merge_duplicate_chronology_items(items):
     """
@@ -72,9 +69,7 @@ def _merge_duplicate_chronology_items(items):
                 if evidence_key not in known:
                     existing["evidence"].append(evidence)
                     known.add(evidence_key)
-
     return merged
-
 
 def generate_analysis(db, case_id: int):
     case = db.get(Case, case_id)
@@ -98,18 +93,17 @@ def generate_analysis(db, case_id: int):
         '"content":"Detailed finding","evidence":[{"chunk_id":123,'
         '"quote":"Exact source quotation","note":"Relevance"}]}]}\n'
         "Every item must have all four fields. Use only these exact section "
-        "names: Executive Summary, Case Background, Issues, " #Facts
-        "Contradictions, Parties, Unresolved Facts, Evidence, Law, " #Missing Information,
-        # "Analysis," 
-        " Chronology, Dates. Never change the schema.\n\n"
+        "names: Executive Summary, Case Background, Facts, Issues, Parties, "
+        "Evidence, Contradictions, Unresolved Facts, Chronology, Law, Analysis. "
+        "Do not use other section names. Never change the schema.\n\n"
 
         "CATEGORY RULES:\n"
         "Executive Summary: Concise case overview, parties, dispute, relief, "
         "key records, evidence. Do not draw "
         "complete-case conclusions from one batch.\n"
-        "Case Background: Material factual and procedural history."
-        "Separate material facts; attribute allegations to their makers.\n"
-        # "Facts: Separate material facts; attribute allegations to their makers.\n"
+        "Case Background: Briefly explain the nature of the case and its procedural context.\n"
+        "Facts: Extract distinct material facts. Attribute allegations to their makers; "
+        "distinguish allegations from facts established by records.\n"
         "Issues: Specific factual or legal questions requiring determination.\n"
         # "Parties: Each party's identity, role, claims, grounds, relief, "
         "Parties: For EACH party or material participant, create a separate finding."
@@ -141,28 +135,25 @@ def generate_analysis(db, case_id: int):
         "and the precise inconsistency. Do not confuse missing information "
         "with contradiction.\n"
        
-        # "Missing Information: Identify specific material information, "
-        # "documents, records, or explanations necessary to resolve those "
-        # "questions but not available in the case record. Do not treat absence "
-        # "from one batch or retrieved excerpt as proof that information is "
-        # "missing. Check the available case material before identifying a gap. "
-        # "Do not invent missing facts or assume that an allegation is true."
+        "Unresolved Facts: Identify material factual questions that remain unanswered, "
+        "disputed, unverified, or unsupported in the available case record. Explain "
+        "what is known and what remains uncertain. Do not treat absence from this batch "
+        "alone as proof that information is missing; flag only gaps directly supported "
+        "by the supplied excerpts and avoid complete-case conclusions.\n"
 
-        "Chronology : Extract every event that has a specific or implied date/time marker."
-        "Convert all dates to a unified, standard format (e.g., YYYY-MM-DD or DD Month YYYY). If a specific day is missing, use 'Month YYYY'."
-        "Chronologically sort the events from the earliest date to the most recent date. Do not skip any intermediate procedural steps mentioned."
-        "Provide a brief analysis of the progression (e.g., gaps in time, speed of resolution, or key turning points).\n"
-
-        "Unresolved Facts: Identify material factual questions that remain "
-        "unanswered, disputed, unverified, or unsupported by sufficient "
-        "evidence in the available case record. Explain what is known, what "
-        "remains uncertain, and which parties or documents are relevant. \n"
+        "Chronology: Extract an event only when the supplied source explicitly states "
+        "a date or time marker for that event. Do not infer or invent dates, and do not "
+        "assign a more precise date than the source provides. Preserve the source date "
+        "wording in event_date unless its conversion to ISO format is unambiguous. "
+        "Each chronology item must describe one event and cite a quotation that supports "
+        "both the event and its date. Do not add a general timeline analysis as an event.\n"
 
         "Law: Only explicitly identified Acts, rules, sections, regulations "
         "or legal principles. Never infer applicable law or classify facts "
         "as legal provisions.\n"
-        # "Analysis: Explain relationships, evidentiary strengths, weaknesses "
-        # "and implications. Label inferences clearly.\n"
+        "Analysis: Explain how supported facts, evidence, party positions and legal "
+        "references relate to the issues. Identify evidentiary strengths, weaknesses "
+        "and implications. Clearly label analytical inferences and cite their factual basis.\n"
 
         "CITATIONS: Every document-derived finding must contain at least "
         "one evidence entry. chunk_id must belong to the supplied excerpts. "
@@ -184,7 +175,6 @@ def generate_analysis(db, case_id: int):
         "only if no supported findings exist. No Markdown or additional prose."
     )
 
-
     all_items = []
     # Small batches preserve the existing protection against provider TPM limits.
     batch_size = 6
@@ -199,11 +189,11 @@ def generate_analysis(db, case_id: int):
             f"Act: {case.act}\nSections: {case.sections}\nApplicant: {case.applicant}\n"
             f"Respondent: {case.respondent}\n\n"
             f"DOCUMENT EXCERPTS (batch {offset // batch_size + 1})\n{context}\n\n"
-            "Extract every applicable analysis category supported by these excerpts. Return "
-            "Executive Summary, Case Background, Issues, Parties, Evidence and Law " # fact , unresolved fact
-            "when supported; also return Contradictions,  " #Missing Information,
-            # "Analysis "
-            "and explicitly dated Chronology events when supported. Do not "
+            "Extract every applicable category supported by these excerpts: Executive Summary, "
+            "Case Background, Facts, Issues, Parties, Evidence, Contradictions, "
+            "Unresolved Facts, Chronology, Law and Analysis. Return each category only "
+            "when these excerpts provide relevant support. Do not omit a supported category "
+            "merely because another category is easier to answer. Do not "
             "fill a category with unrelated content. Every item must have at least one exact "
             "supporting quote from this batch. Return one JSON object."
         )
