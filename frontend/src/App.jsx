@@ -20,6 +20,8 @@ async function api(path, options = {}) {
 
 const TAB_CONFIG = [
   { id: "overview", label: "Overview" },
+  { id: "facts", label: "Facts" },
+  { id: "analysis", label: "Analysis" },
   { id: "issues", label: "Issues" },
   { id: "parties", label: "Parties" },
   { id: "evidence", label: "Evidence" },
@@ -29,7 +31,7 @@ const TAB_CONFIG = [
 ];
 
 const SECTION_ALIASES = {
-  // facts: ["fact", "facts"], 
+  facts: ["fact", "facts", "material facts"],
   background: ["background", "case background"],
   issue: ["issue", "issues", "dispute", "disputed issue"],
   contradiction: ["contradiction", "contradictions", "conflict", "conflicts", "discrepancy", "discrepancies"],
@@ -39,7 +41,7 @@ const SECTION_ALIASES = {
   law: ["law", "legal", "legal provision", "legal provisions", "act", "section", "statute"],
   missing: ["missing information", "missing", "unresolved", "unresolved facts"],
   summary: ["summary", "executive summary"],
-  // analysis: ["analysis", "analytical assessment"],
+  analysis: ["analysis", "analytical assessment"],
 };
 
 function normalizeSection(value) {
@@ -271,6 +273,33 @@ function PdfPreviewPane({ citation, caseId, onClose, onNewTab, fullscreen, onTog
   );
 }
 
+function parseChronologyDate(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+
+  // ISO date or timestamp.
+  const iso = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) return new Date(Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]))).getTime();
+
+  // Numeric dates: DD/MM/YYYY or DD-MM-YYYY.
+  const numeric = raw.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+  if (numeric) return new Date(Date.UTC(Number(numeric[3]), Number(numeric[2]) - 1, Number(numeric[1]))).getTime();
+
+  // Text dates: 10 January 2024, January 2024, etc.
+  const parsed = Date.parse(raw);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function sortChronologyItems(list) {
+  return [...list].sort((a, b) => {
+    const dateA = parseChronologyDate(a.event_date);
+    const dateB = parseChronologyDate(b.event_date);
+    // Keep original item order when either date cannot be interpreted safely.
+    if (dateA === null || dateB === null) return (a.item_order ?? 0) - (b.item_order ?? 0);
+    return dateA - dateB || (a.item_order ?? 0) - (b.item_order ?? 0);
+  });
+}
+
 export default function App() {
   const [cases, setCases] = useState([]);
   const [selected, setSelected] = useState(null);
@@ -290,11 +319,11 @@ export default function App() {
   const [standalonePdfPreview, setStandalonePdfPreview] = useState(null);
 
   // Material facts only
-  // const facts = useMemo(() => items.filter((x) => matchesSection(x, ["facts"])),[items]);
+  const facts = useMemo(() => items.filter((x) => matchesSection(x, ["facts"])), [items]);
 // Case background and procedural history only
   const background = useMemo(() => items.filter((x) => matchesSection(x, ["background"])),[items]);
 // Analytical assessment
-  // const analysisFindings = useMemo(() => items.filter((x) => matchesSection(x, ["analysis"])),[items]);
+  const analysisFindings = useMemo(() => items.filter((x) => matchesSection(x, ["analysis"])), [items]);
   const issues = useMemo(() => items.filter((x) => matchesSection(x, ["issue", "dispute"])), [items]);
   const contradictions = useMemo(() => items.filter((x) => matchesSection(x, ["contradiction", "conflict", "discrepancy"])), [items]);
   const chronology = useMemo(() => items.filter((x) => matchesSection(x, ["chronology", "timeline","dates"])), [items]);
@@ -720,6 +749,7 @@ export default function App() {
                 <nav className="analysis-tabs" aria-label="Analysis sections">
                   {TAB_CONFIG.map((tab) => {
                     const count = {
+                      facts: facts.length, analysis: analysisFindings.length,
                       issues: issues.length, parties: parties.length, evidence: evidence.length,
                       chronology: chronology.length, law: law.length, sources: allCitations.length,
                     }[tab.id];
@@ -751,10 +781,12 @@ export default function App() {
                       <div className="overview-block"><h3>Unresolved Facts</h3>{renderFindings(items.filter((x) => matchesSection(x, ["missing"])),"No unresolved facts were identified in the returned analysis. This does not mean every fact has been established.")}</div>
                     </>
                   )}
+                  {activeTab === "facts" && <><div className="tab-intro"><h3>Material facts</h3><p>Material facts extracted from the case record, with allegations attributed to their source.</p></div>{renderFindings(facts, "No separately classified material facts were returned by the analysis.")}</>}
+                  {activeTab === "analysis" && <><div className="tab-intro"><h3>Analytical assessment</h3><p>Assessment connecting the facts, evidence, contradictions and applicable law. Verify all inferences against the cited record.</p></div>{renderFindings(analysisFindings, "No separate analytical assessment was returned by the analysis.")}</>}
                   {activeTab === "issues" && <><div className="tab-intro"><h3>Issues for consideration</h3><p>Questions and disputed points identified from the case record.</p></div>{renderFindings(issues, "No separately classified issues were returned by the analysis.")}{contradictions.length > 0 && <div className="overview-block"><h3>Related contradictions</h3>{renderFindings(contradictions, "No contradictions identified.")}</div>}</>}
                   {activeTab === "parties" && <><div className="tab-intro"><h3>Parties and participants</h3><p>Applicant and respondent positions are displayed separately, with their source citations retained.</p></div><div className="party-grid"><div className="party-card"><span>APPLICANT</span><strong>{selected.applicant || "Not specified"}</strong></div><div className="party-card"><span>RESPONDENT</span><strong>{selected.respondent || "Not specified"}</strong></div></div><PartyFindingCards list={parties} onCitation={openCitation} activeCitation={citation} caseId={selected?.id} /></>}
-                  {activeTab === "evidence" && <><div className="tab-intro"><h3>Evidence assessment</h3><p>Documentary evidence and its relevance to the disputed facts.</p></div>{renderFindings(evidence.length ? evidence : items.filter((x) => x.citations?.length), "No evidence assessment was returned. Review the Sources tab for all available citations.")}</>}
-                  {activeTab === "chronology" && <><div className="tab-intro"><h3>Case chronology</h3><p>Date-ordered events extracted from the documents. Each event should have source support.</p></div>{chronology.length ? <div className="timeline">{[...chronology].sort((a, b) => String(a.event_date || "").localeCompare(String(b.event_date || ""))).map((item, index) => <article className="timeline-item" key={item.id}><div className="timeline-point">{index + 1}</div><div className="timeline-content"><time>{item.event_date || "Date not specified"}</time><p>{item.content}</p><CitationChips citations={item.citations || []} onOpen={openCitation} activeCitation={citation} caseId={selected?.id} /></div></article>)}</div> : <div className="empty-panel"><strong>No chronology events available</strong><p>Run Analyse Case after processing the PDFs. Only explicitly dated, source-supported events are displayed here.</p></div>}</>}
+                  {activeTab === "evidence" && <><div className="tab-intro"><h3>Evidence assessment</h3><p>Documentary evidence and its relevance to the disputed facts.</p></div>{renderFindings(evidence, "No evidence assessment was returned. Review the Sources tab for all available citations.")}</>}
+                  {activeTab === "chronology" && <><div className="tab-intro"><h3>Case chronology</h3><p>Date-ordered events extracted from the documents. Each event should have source support.</p></div>{chronology.length ? <div className="timeline">{sortChronologyItems(chronology).map((item, index) => <article className="timeline-item" key={item.id}><div className="timeline-point">{index + 1}</div><div className="timeline-content"><time>{item.event_date || "Date not specified"}</time><p>{item.content}</p><CitationChips citations={item.citations || []} onOpen={openCitation} activeCitation={citation} caseId={selected?.id} /></div></article>)}</div> : <div className="empty-panel"><strong>No chronology events available</strong><p>Run Analyse Case after processing the PDFs. Only explicitly dated, source-supported events are displayed here.</p></div>}</>}
                   {activeTab === "law" && <><div className="tab-intro"><h3>Legal provisions</h3><p>Acts, sections and legal references mentioned in the case documents.</p></div><div className="case-law-meta"><span><b>Act:</b> {selected.act || "Not specified"}</span><span><b>Sections:</b> {selected.sections || "Not specified"}</span></div>{renderFindings(law, "No separately classified legal provisions were returned by the analysis.")}</>}
                   {activeTab === "sources" && (
                     <>

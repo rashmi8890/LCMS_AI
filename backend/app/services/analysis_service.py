@@ -105,7 +105,6 @@ def generate_analysis(db, case_id: int):
         "Facts: Extract distinct material facts. Attribute allegations to their makers; "
         "distinguish allegations from facts established by records.\n"
         "Issues: Specific factual or legal questions requiring determination.\n"
-        # "Parties: Each party's identity, role, claims, grounds, relief, "
         "Parties: For EACH party or material participant, create a separate finding."
 
         "Include:"
@@ -127,10 +126,31 @@ def generate_analysis(db, case_id: int):
         "Preserve important arguments, dates, order numbers and factual"
         "particulars. Attribute every statement to its actual source."
         "and Support each party's position with exact source quotations.\n"
-        # "response, defence, admissions and denials where recorded.\n"
 
-        "Evidence: Assess actual documents, their contents, relevance, "
-        "support and limitations. A citation alone is not evidence.\n"
+        "Evidence: Analyse the SUBSTANTIVE CONTENT of records, not merely "
+        "the names or types of documents submitted. Do not produce an inventory "
+        "such as 'the bundle contains attendance registers, wage sheets and bank "
+        "records' unless the inventory itself is materially relevant. For each "
+        "record with readable substantive content, extract the actual entries, "
+        "figures, dates, periods, calculations, names, transaction details, "
+        "attendance marks, recorded hours, deductions, payment status, statements "
+        "or other particulars that are explicitly visible in the supplied excerpt. "
+        "Preserve exact amounts, dates, units and labels; do not calculate, infer, "
+        "complete or normalize missing values unless the calculation is transparent "
+        "and all inputs are explicitly present. Explain what the extracted content "
+        "shows in relation to a specific disputed fact. Distinguish what the record "
+        "directly records from what it may support and what it does NOT establish. "
+        "State limitations only when grounded in the excerpt; do not assume a record "
+        "is uncertified, incomplete, authentic or unauthentic unless the source says "
+        "so. Compare records only when the supplied excerpts contain enough matching "
+        "details to make a valid comparison, and identify any mismatch precisely. "
+        "Do not repeat a generic relevance/verification paragraph for different "
+        "records. If an excerpt contains only a cover page, index, annexure list or "
+        "document title without substantive record entries, do not describe the "
+        "underlying record as if its contents were examined; omit an Evidence item "
+        "unless the index information itself proves a material fact. Every Evidence "
+        "finding must include at least one exact quotation showing the actual record "
+        "content being analysed. A citation or document name alone is not evidence.\n"
         "Contradictions: Identify both conflicting versions, their sources "
         "and the precise inconsistency. Do not confuse missing information "
         "with contradiction.\n"
@@ -148,12 +168,16 @@ def generate_analysis(db, case_id: int):
         "Each chronology item must describe one event and cite a quotation that supports "
         "both the event and its date. Do not add a general timeline analysis as an event.\n"
 
-        "Law: Only explicitly identified Acts, rules, sections, regulations "
-        "or legal principles. Never infer applicable law or classify facts "
-        "as legal provisions.\n"
-        "Analysis: Explain how supported facts, evidence, party positions and legal "
-        "references relate to the issues. Identify evidentiary strengths, weaknesses "
-        "and implications. Clearly label analytical inferences and cite their factual basis.\n"
+        "Law: Include ONLY legal provisions explicitly mentioned "
+        "in the supplied documents, such as Acts, statutes, sections, "
+        "rules, regulations, notifications or cited legal principles. "
+        "Identify the exact provision and explain its stated relevance "
+        "only when supported by the source. Every Law finding must "
+        "contain an exact quotation identifying the legal provision. "
+        "NEVER create a Law finding merely to state that no law, Act, "
+        "section or statutory provision was mentioned. If no explicit "
+        "legal provision is found, return NO Law item for that batch. "
+        "Do not invent legal provisions or introduce external law."
 
         "CITATIONS: Every document-derived finding must contain at least "
         "one evidence entry. chunk_id must belong to the supplied excerpts. "
@@ -176,7 +200,6 @@ def generate_analysis(db, case_id: int):
     )
 
     all_items = []
-    # Small batches preserve the existing protection against provider TPM limits.
     batch_size = 6
     for offset in range(0, len(chunks), batch_size):
         batch = chunks[offset:offset + batch_size]

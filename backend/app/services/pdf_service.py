@@ -3,17 +3,13 @@ import re
 import logging
 from io import BytesIO
 from difflib import SequenceMatcher
-
 import pymupdf
 from PIL import Image
 
-
 logger = logging.getLogger(__name__)
-
 
 def _configure_tesseract():
     import pytesseract
-
     configured_path = os.getenv("TESSERACT_CMD")
 
     if configured_path:
@@ -25,7 +21,6 @@ def _configure_tesseract():
             pytesseract.pytesseract.tesseract_cmd = windows_path
 
     return pytesseract
-
 
 def _render_page(page, dpi=300):
     """Render a PDF page for OCR."""
@@ -40,28 +35,78 @@ def _render_page(page, dpi=300):
 
     return image, scale
 
-
 def _ocr_page(page):
-    """Extract OCR text. Preserves the existing extract_pdf interface."""
+    """Extract OCR text while retaining visual line and column spacing.
+
+    This is layout-preserving text reconstruction, not guaranteed table
+    recognition. Original word order and line boundaries are retained.
+    """
     try:
         pytesseract = _configure_tesseract()
-
         language = os.getenv("TESSERACT_LANG", "eng")
         dpi = int(os.getenv("OCR_DPI", "300"))
-
         image, _ = _render_page(page, dpi)
 
-        return pytesseract.image_to_string(
+        data = pytesseract.image_to_data(
             image,
             lang=language,
-        ).strip()
+            output_type=pytesseract.Output.DICT,
+            config="--psm 3",
+        )
+
+        lines = {}
+        for index, raw_text in enumerate(data.get("text", [])):
+            word = str(raw_text).strip()
+            if not word:
+                continue
+            try:
+                confidence = float(data["conf"][index])
+                left = int(data["left"][index])
+                width = int(data["width"][index])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if confidence < 20:
+                continue
+
+            key = (
+                int(data["block_num"][index]),
+                int(data["par_num"][index]),
+                int(data["line_num"][index]),
+            )
+            lines.setdefault(key, []).append((left, width, word))
+
+        output_lines = []
+        for key in sorted(lines):
+            words = sorted(lines[key], key=lambda item: item[0])
+            if not words:
+                continue
+
+            # Approximate visual columns using large horizontal gaps.
+            # Tabs retain column separation for downstream text/chunking.
+            pieces = [words[0][2]]
+            previous_right = words[0][0] + words[0][1]
+            typical_widths = [w for _, w, _ in words if w > 0]
+            average_word_width = (
+                sum(typical_widths) / len(typical_widths)
+                if typical_widths else 20
+            )
+            for left, width, word in words[1:]:
+                gap = max(0, left - previous_right)
+                if gap >= average_word_width * 0.65:
+                    pieces.append("\t")
+                else:
+                    pieces.append(" ")
+                pieces.append(word)
+                previous_right = left + width
+            output_lines.append("".join(pieces))
+
+        return "\n".join(output_lines).strip()
 
     except ImportError as exc:
         raise RuntimeError(
             "OCR dependencies are missing. Install with: "
             "python -m pip install pytesseract Pillow"
         ) from exc
-
     except Exception as exc:
         raise RuntimeError(
             "OCR failed. Check Tesseract installation, language data "
@@ -73,14 +118,12 @@ def _normalise_token(value):
     """Normalize a word for matching without changing source text."""
     return re.sub(r"[^a-z0-9]", "", str(value).lower())
 
-
 def _quote_tokens(quote):
     return [
         token
         for token in (_normalise_token(w) for w in (quote or "").split())
         if token
     ]
-
 
 def _group_word_rectangles(words, page_width, page_height):
     """
@@ -212,7 +255,6 @@ def _find_word_sequence(word_entries, quote, page):
         page.rect.height,
     )
 
-
 def _native_word_entries(page):
     """Read native PDF words with their coordinates."""
     entries = []
@@ -234,7 +276,6 @@ def _native_word_entries(page):
         ))
 
     return entries
-
 
 def _ocr_word_entries(page):
     """OCR the page and return word-level PDF coordinates."""
@@ -305,7 +346,6 @@ def _ocr_word_entries(page):
             "OCR dependencies are missing. Install pytesseract and Pillow."
         ) from exc
 
-
 def extract_pdf(path: str):
     """
     Extract text page by page.
@@ -349,35 +389,63 @@ def extract_pdf(path: str):
 
     return pages
 
-
 def split_text(text: str, max_chars: int = 1500, overlap: int = 180):
-    """Existing chunking behaviour preserved."""
-    clean = " ".join((text or "").split())
+    """Split text without flattening meaningful OCR/PDF line boundaries.
+
+    Prefer paragraph/line boundaries. Long individual lines are still split
+    safely, with the existing character limit and overlap semantics.
+    """
+    clean = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    clean = re.sub(r"[ \t]+\n", "\n", clean)
+    clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
+    if not clean:
+        return []
 
     chunks = []
-    start = 0
+    current = ""
 
-    while start < len(clean):
-        end = min(start + max_chars, len(clean))
+    def emit(value):
+        value = value.strip()
+        if value:
+            chunks.append(value)
 
-        if end < len(clean):
-            boundary = clean.rfind(" ", start, end)
+    # Keep each OCR visual line intact whenever it fits in a chunk.
+    units = clean.splitlines()
+    for unit in units:
+        unit = unit.strip()
+        if not unit:
+            if current and not current.endswith("\n"):
+                current += "\n"
+            continue
 
-            if boundary > start + max_chars // 2:
-                end = boundary
+        if len(unit) > max_chars:
+            if current.strip():
+                emit(current)
+                current = ""
+            position = 0
+            while position < len(unit):
+                end = min(position + max_chars, len(unit))
+                if end < len(unit):
+                    boundary = unit.rfind(" ", position, end)
+                    if boundary > position + max_chars // 2:
+                        end = boundary
+                emit(unit[position:end])
+                if end >= len(unit):
+                    break
+                position = max(end - overlap, position + 1)
+            continue
 
-        chunk = clean[start:end].strip()
+        candidate = unit if not current else current.rstrip() + "\n" + unit
+        if len(candidate) <= max_chars:
+            current = candidate
+        else:
+            previous = current.rstrip()
+            emit(previous)
+            carry = previous[-overlap:] if overlap > 0 else ""
+            current = (carry + "\n" if carry else "") + unit
 
-        if chunk:
-            chunks.append(chunk)
-
-        if end >= len(clean):
-            break
-
-        start = max(end - overlap, start + 1)
-
+    emit(current)
     return chunks
-
 
 def find_highlight_rects(
     pdf_path: str,
