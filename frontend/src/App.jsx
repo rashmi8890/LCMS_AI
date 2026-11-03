@@ -29,7 +29,8 @@ const TAB_CONFIG = [
 ];
 
 const SECTION_ALIASES = {
-  facts: ["fact", "facts"], background: ["background", "case background"],
+  // facts: ["fact", "facts"], 
+  background: ["background", "case background"],
   issue: ["issue", "issues", "dispute", "disputed issue"],
   contradiction: ["contradiction", "contradictions", "conflict", "conflicts", "discrepancy", "discrepancies"],
   chronology: ["chronology", "timeline", "events", "dates"],
@@ -289,7 +290,7 @@ export default function App() {
   const [standalonePdfPreview, setStandalonePdfPreview] = useState(null);
 
   // Material facts only
-  const facts = useMemo(() => items.filter((x) => matchesSection(x, ["facts"])),[items]);
+  // const facts = useMemo(() => items.filter((x) => matchesSection(x, ["facts"])),[items]);
 // Case background and procedural history only
   const background = useMemo(() => items.filter((x) => matchesSection(x, ["background"])),[items]);
 // Analytical assessment
@@ -743,7 +744,7 @@ export default function App() {
                       {/* Case Background */}
                       <div className="overview-block"><h3>Case Background</h3>{renderFindings(background,"No separately classified case background was returned.")}</div>
                       {/* Material Facts */}
-                      <div className="overview-block"><h3>Facts</h3>{renderFindings(facts, "No separately classified material facts were returned.")}</div>
+                      {/* <div className="overview-block"><h3>Facts</h3>{renderFindings(facts, "No separately classified material facts were returned.")}</div> */}
                       {/* Analytical Assessment */}
                       {/* <div className="overview-block"><h3>Analysis</h3>{renderFindings(analysisFindings, "No separate analytical assessment was returned.")}</div> */}
                       {/* Unresolved Facts */}

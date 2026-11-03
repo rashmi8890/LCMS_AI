@@ -133,7 +133,6 @@
 #             for rect in rects
 #         ]
 
-
 import os
 import re
 import logging

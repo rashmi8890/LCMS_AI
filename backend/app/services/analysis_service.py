@@ -98,8 +98,8 @@ def generate_analysis(db, case_id: int):
         '"content":"Detailed finding","evidence":[{"chunk_id":123,'
         '"quote":"Exact source quotation","note":"Relevance"}]}]}\n'
         "Every item must have all four fields. Use only these exact section "
-        "names: Executive Summary, Case Background, Facts, Issues, "
-        "Contradictions, Missing Information, Parties, Evidence, Law, "
+        "names: Executive Summary, Case Background, Issues, " #Facts
+        "Contradictions, Parties, Evidence, Law, " #Missing Information,
         # "Analysis," 
         " Chronology, Dates. Never change the schema.\n\n"
 
@@ -107,8 +107,9 @@ def generate_analysis(db, case_id: int):
         "Executive Summary: Concise case overview, parties, dispute, relief, "
         "key records, evidence. Do not draw "
         "complete-case conclusions from one batch.\n"
-        "Case Background: Material factual and procedural history.\n"
-        "Facts: Separate material facts; attribute allegations to their makers.\n"
+        "Case Background: Material factual and procedural history."
+        "Separate material facts; attribute allegations to their makers.\n"
+        # "Facts: Separate material facts; attribute allegations to their makers.\n"
         "Issues: Specific factual or legal questions requiring determination.\n"
         # "Parties: Each party's identity, role, claims, grounds, relief, "
         "Parties: For EACH party or material participant, create a separate finding."
@@ -139,8 +140,7 @@ def generate_analysis(db, case_id: int):
         "Contradictions: Identify both conflicting versions, their sources "
         "and the precise inconsistency. Do not confuse missing information "
         "with contradiction.\n"
-        # "Missing Information: Identify material gaps explicitly supported "
-        # "by the record. Absence from one batch does not establish a gap.\n"
+       
         # "Unresolved Facts: Identify material factual questions that remain "
         # "unanswered, disputed, unverified, or unsupported by sufficient "
         # "evidence in the available case record. Explain what is known, what "
@@ -152,20 +152,10 @@ def generate_analysis(db, case_id: int):
         # "missing. Check the available case material before identifying a gap. "
         # "Do not invent missing facts or assume that an allegation is true."
 
-        # "Chronology: One item per distinct material event with an explicit "
-        # "source-supported date. Never infer dates. Use YYYY-MM-DD only "
-        # "when unambiguous; otherwise preserve the source wording."
-        # "Use dates found in the source material."
-        # "Do not infer a date that is not present."
-        # "Do not treat a document's date as proof that the described event occurred.\n"
-        "Chronology: Every document-derived factual paragraph and every Chronology event must have "
-        "at least one evidence entry. For Chronology, create one item per distinct event "
-        "that has an explicit date or date range in the supplied source text. Set section "
-        "to exactly 'Chronology'. Put the date in event_date exactly as printed in the "
-        "source where possible; normalize to YYYY-MM-DD only when the date is unambiguous. "
-        "If only month/year or a date range is given, preserve that wording. Never infer "
-        "a date from document order, filing context, or surrounding events. Do not create "
-        "an event with no explicit date. Put a concise event description in content. /n"
+        "Chronology : Extract every event that has a specific or implied date/time marker."
+        "Convert all dates to a unified, standard format (e.g., YYYY-MM-DD or DD Month YYYY). If a specific day is missing, use 'Month YYYY'."
+        "Chronologically sort the events from the earliest date to the most recent date. Do not skip any intermediate procedural steps mentioned."
+        "Provide a brief analysis of the progression (e.g., gaps in time, speed of resolution, or key turning points).\n"
 
         "Law: Only explicitly identified Acts, rules, sections, regulations "
         "or legal principles. Never infer applicable law or classify facts "
@@ -209,8 +199,8 @@ def generate_analysis(db, case_id: int):
             f"Respondent: {case.respondent}\n\n"
             f"DOCUMENT EXCERPTS (batch {offset // batch_size + 1})\n{context}\n\n"
             "Extract every applicable analysis category supported by these excerpts. Return "
-            "Executive Summary, Case Background, Facts, Issues, Parties, Evidence and Law "
-            "when supported; also return Contradictions, Missing Information, "
+            "Executive Summary, Case Background, Issues, Parties, Evidence and Law " # fact , unresolved fact
+            "when supported; also return Contradictions,  " #Missing Information,
             # "Analysis "
             "and explicitly dated Chronology events when supported. Do not "
             "fill a category with unrelated content. Every item must have at least one exact "

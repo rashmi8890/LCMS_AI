@@ -2,7 +2,7 @@ import os
 import uuid
 from pathlib import Path
 
-import fitz
+import pymupdf
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response, FileResponse
 from sqlalchemy.orm import Session
@@ -263,11 +263,11 @@ def page_image(document_id: int, page_number: int, db: Session = Depends(get_db)
         raise HTTPException(404, "Document not found")
 
     try:
-        with fitz.open(doc.stored_path) as pdf:
+        with pymupdf.open(doc.stored_path) as pdf:
             if page_number < 1 or page_number > len(pdf):
                 raise HTTPException(404, "Page not found")
             pix = pdf[page_number - 1].get_pixmap(
-                matrix=fitz.Matrix(1.5, 1.5),
+                matrix=pymupdf.Matrix(1.5, 1.5),
                 alpha=False,
             )
             data = pix.tobytes("png")
