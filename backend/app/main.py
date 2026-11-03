@@ -7,7 +7,7 @@ from .routers import cases, documents, analysis, notesheets
 
 Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
 Path(settings.export_dir).mkdir(parents=True, exist_ok=True)
-Base.metadata.create_all(bind=engine)  # Development bootstrap; use Alembic migrations in production.
+Base.metadata.create_all(bind=engine)  
 app = FastAPI(title="LCMS API", version="0.2.0")
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"],
                    allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
