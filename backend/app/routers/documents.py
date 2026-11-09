@@ -1,7 +1,7 @@
 import os
 import uuid
 from pathlib import Path
-
+from ..services.embedding_service import embed_chunks
 import pymupdf
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response, FileResponse
@@ -182,6 +182,7 @@ def _extract_and_store(doc: Document, db: Session):
 @router.post("/api/documents/{document_id}/process")
 def process_document(document_id: int, db: Session = Depends(get_db)):
     doc = db.get(Document, document_id)
+
     if not doc:
         raise HTTPException(404, "Document not found")
 
@@ -190,13 +191,39 @@ def process_document(document_id: int, db: Session = Depends(get_db)):
         db.commit()
     except Exception as exc:
         db.rollback()
-        raise HTTPException(422, f"PDF processing failed: {exc}") from exc
+        raise HTTPException(
+            422,
+            f"PDF processing failed: {exc}"
+        ) from exc
+
+    embedding_result = {
+        "status": "not_required"
+    }
+
+    if result["chunks"] > 0:
+        try:
+            chunks = (
+                db.query(Chunk)
+                .filter_by(document_id=doc.id)
+                .order_by(Chunk.id)
+                .all()
+            )
+
+            embedding_result = embed_chunks(db, chunks)
+
+        except Exception as exc:
+            embedding_result = {
+                "status": "failed",
+                "error": str(exc),
+            }
 
     status = "processed" if result["chunks"] > 0 else "no_text"
+
     return {
         "document_id": doc.id,
         **result,
         "status": status,
+        "embedding": embedding_result,
         "message": (
             "Text extracted successfully."
             if result["chunks"] > 0
@@ -204,13 +231,11 @@ def process_document(document_id: int, db: Session = Depends(get_db)):
         ),
     }
 
-
 @router.post("/api/cases/{case_id}/documents/process-all")
 def process_all(case_id: int, db: Session = Depends(get_db)):
     if not db.get(Case, case_id):
         raise HTTPException(404, "Case not found")
 
-    # Retry documents with zero chunks even if an older run incorrectly marked them processed.
     docs = (
         db.query(Document)
         .filter_by(case_id=case_id)
@@ -219,33 +244,65 @@ def process_all(case_id: int, db: Session = Depends(get_db)):
     )
 
     results = []
-    for doc in docs:
-        existing_chunks = db.query(Chunk).filter_by(document_id=doc.id).count()
-        if doc.is_processed and existing_chunks > 0:
-            results.append({
-                "document_id": doc.id,
-                "filename": doc.filename,
-                "status": "already_processed",
-                "pages": len(doc.pages),
-                "chunks": existing_chunks,
-            })
-            continue
 
+    for doc in docs:
         try:
-            result = _extract_and_store(doc, db)
-            db.commit()
-            status = "processed" if result["chunks"] > 0 else "no_text"
+            existing_chunks = (
+                db.query(Chunk)
+                .filter_by(document_id=doc.id)
+                .count()
+            )
+
+            if doc.is_processed and existing_chunks > 0:
+                extraction_result = {
+                    "pages": len(doc.pages),
+                    "chunks": existing_chunks,
+                    "status": "already_processed",
+                }
+            else:
+                result = _extract_and_store(doc, db)
+                db.commit()
+
+                extraction_result = {
+                    **result,
+                    "status": (
+                        "processed"
+                        if result["chunks"] > 0
+                        else "no_text"
+                    ),
+                }
+
+            embedding_result = {
+                "status": "not_required"
+            }
+
+            if extraction_result["chunks"] > 0:
+                try:
+                    chunks = (
+                        db.query(Chunk)
+                        .filter_by(document_id=doc.id)
+                        .order_by(Chunk.id)
+                        .all()
+                    )
+
+                    embedding_result = embed_chunks(db, chunks)
+
+                except Exception as exc:
+                    embedding_result = {
+                        "status": "failed",
+                        "error": str(exc),
+                    }
+
             results.append({
                 "document_id": doc.id,
                 "filename": doc.filename,
-                **result,
-                "status": status,
-                **({
-                    "error": "No selectable text found; scanned PDFs require OCR."
-                } if result["chunks"] == 0 else {}),
+                **extraction_result,
+                "embedding": embedding_result,
             })
+
         except Exception as exc:
             db.rollback()
+
             results.append({
                 "document_id": doc.id,
                 "filename": doc.filename,
@@ -254,7 +311,6 @@ def process_all(case_id: int, db: Session = Depends(get_db)):
             })
 
     return {"results": results}
-
 
 @router.get("/api/documents/{document_id}/pages/{page_number}/image")
 def page_image(document_id: int, page_number: int, db: Session = Depends(get_db)):

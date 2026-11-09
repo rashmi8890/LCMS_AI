@@ -12,7 +12,7 @@ from typing import Sequence
 
 import numpy as np
 from sentence_transformers import SentenceTransformer
-
+from ..models import ChunkEmbedding
 from ..config import settings
 
 
@@ -43,6 +43,103 @@ def embed_passages(texts: Sequence[str]) -> list[list[float]]:
     )
     return np.asarray(vectors, dtype=np.float32).tolist()
 
+def embed_chunks(db, chunks) -> dict:
+    """
+    Generate and persist embeddings for the supplied chunks.
+
+    Skips chunks whose current text already has a valid embedding
+    for the configured model.
+    Commits each batch so completed batches survive a later failure.
+    """
+    if not chunks:
+        return {
+            "total_chunks": 0,
+            "created": 0,
+            "updated": 0,
+            "skipped": 0,
+            "status": "complete",
+        }
+
+    model = model_name()
+    created = updated = skipped = 0
+    batch_size = max(1, settings.embedding_batch_size)
+
+    try:
+        for offset in range(0, len(chunks), batch_size):
+            batch = chunks[offset:offset + batch_size]
+            chunk_ids = [chunk.id for chunk in batch]
+
+            records = (
+                db.query(ChunkEmbedding)
+                .filter(ChunkEmbedding.chunk_id.in_(chunk_ids))
+                .all()
+            )
+
+            records_by_chunk = {
+                record.chunk_id: record for record in records
+            }
+
+            pending = []
+
+            for chunk in batch:
+                digest = text_hash(chunk.text)
+                record = records_by_chunk.get(chunk.id)
+
+                if (
+                    record
+                    and record.model_name == model
+                    and record.text_hash == digest
+                    and record.vector
+                    and record.dimension == len(record.vector)
+                ):
+                    skipped += 1
+                    continue
+
+                pending.append((chunk, record, digest))
+
+            if not pending:
+                continue
+
+            vectors = embed_passages(
+                [chunk.text for chunk, _, _ in pending]
+            )
+
+            if len(vectors) != len(pending):
+                raise RuntimeError(
+                    "Embedding count does not match pending chunk count."
+                )
+
+            for (chunk, record, digest), vector in zip(pending, vectors):
+                if not vector:
+                    raise RuntimeError(
+                        f"Empty embedding generated for chunk {chunk.id}."
+                    )
+
+                if record is None:
+                    record = ChunkEmbedding(chunk_id=chunk.id)
+                    db.add(record)
+                    created += 1
+                else:
+                    updated += 1
+
+                record.model_name = model
+                record.dimension = len(vector)
+                record.vector = vector
+                record.text_hash = digest
+
+            db.commit()
+
+        return {
+            "total_chunks": len(chunks),
+            "created": created,
+            "updated": updated,
+            "skipped": skipped,
+            "status": "complete",
+        }
+
+    except Exception:
+        db.rollback()
+        raise
 
 def embed_query(query: str) -> list[float]:
     if not query or not query.strip():

@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-import re
-from rank_bm25 import BM25Okapi
+# import re
+# from rank_bm25 import BM25Okapi
 from ..database import get_db
 from ..models import Case, Chunk, ChunkEmbedding
 from ..config import settings
@@ -12,6 +12,10 @@ from ..services.embedding_service import (
     embed_query,
     model_name,
     text_hash,
+)
+from ..services.retrieval_service import (
+    hybrid_search_chunks,
+    tokenize,
 )
 
 router = APIRouter(tags=["embeddings"])
@@ -25,87 +29,65 @@ class HybridSearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=4000)
     limit: int = Field(default=10, ge=1, le=50)
 
-def tokenize(text: str) -> list[str]:
-    """
-    Unicode-aware tokenizer for English and Hindi.
-    Converts text to lowercase and extracts words/numbers.
-    """
-    return re.findall(
-        r"[^\W_]+",
-        (text or "").casefold(),
-        flags=re.UNICODE
-    )
-
-
-def reciprocal_rank_fusion(
-    semantic_results: list,
-    bm25_results: list,
-    k: int = 60
-) -> list:
-    """
-    Merge semantic and BM25 rankings using RRF.
-
-    Each result contains:
-        chunk: Chunk object
-        rank: 1-based rank
-        score: original retriever score
-    """
-    fused = {}
-
-    for results, source in (
-        (semantic_results, "semantic"),
-        (bm25_results, "bm25")
-    ):
-        for item in results:
-            chunk = item["chunk"]
-            chunk_id = chunk.id
-
-            if chunk_id not in fused:
-                fused[chunk_id] = {
-                    "chunk": chunk,
-                    "rrf_score": 0.0,
-                    "semantic_score": None,
-                    "bm25_score": None,
-                    "semantic_rank": None,
-                    "bm25_rank": None,
-                }
-
-            fused[chunk_id]["rrf_score"] += (
-                1.0 / (k + item["rank"])
-            )
-
-            fused[chunk_id][f"{source}_score"] = item["score"]
-            fused[chunk_id][f"{source}_rank"] = item["rank"]
-
-    return sorted(
-        fused.values(),
-        key=lambda item: item["rrf_score"],
-        reverse=True
-    )
-
 @router.get("/api/cases/{case_id}/embeddings/status")
 def embedding_status(case_id: int, db: Session = Depends(get_db)):
     if not db.get(Case, case_id):
         raise HTTPException(404, "Case not found")
 
-    total = (
-        db.query(Chunk).join(Chunk.document)
-        .filter(Chunk.document.has(case_id=case_id)).count()
+    chunks = (
+        db.query(Chunk)
+        .join(Chunk.document)
+        .filter(Chunk.document.has(case_id=case_id))
+        .all()
     )
-    embedded = (
-        db.query(ChunkEmbedding).join(ChunkEmbedding.chunk).join(Chunk.document)
-        .filter(Chunk.document.has(case_id=case_id),
-                ChunkEmbedding.model_name == model_name()).count()
-    )
+
+    chunk_ids = [chunk.id for chunk in chunks]
+
+    records = (
+        db.query(ChunkEmbedding)
+        .filter(ChunkEmbedding.chunk_id.in_(chunk_ids))
+        .all()
+    ) if chunk_ids else []
+
+    records_by_chunk = {
+        record.chunk_id: record for record in records
+    }
+
+    embedded = 0
+    stale = 0
+
+    for chunk in chunks:
+        record = records_by_chunk.get(chunk.id)
+
+        if record is None:
+            continue
+
+        is_valid = (
+            record.model_name == model_name()
+            and record.text_hash == text_hash(chunk.text)
+            and bool(record.vector)
+            and record.dimension == len(record.vector)
+        )
+
+        if is_valid:
+            embedded += 1
+        else:
+            stale += 1
+
+    total = len(chunks)
+    pending = total - embedded
+    missing = pending - stale
+
     return {
         "case_id": case_id,
         "model": model_name(),
         "total_chunks": total,
         "embedded_chunks": embedded,
-        "pending_chunks": max(total - embedded, 0),
-        "ready": total > 0 and total == embedded,
+        "pending_chunks": pending,
+        "missing_embeddings": missing,
+        "stale_chunks": stale,
+        "ready": total > 0 and embedded == total,
     }
-
 
 @router.post("/api/cases/{case_id}/embeddings/rebuild")
 def rebuild_case_embeddings(case_id: int, db: Session = Depends(get_db)):
@@ -132,12 +114,18 @@ def rebuild_case_embeddings(case_id: int, db: Session = Depends(get_db)):
             for chunk in batch:
                 digest = text_hash(chunk.text)
                 record = db.query(ChunkEmbedding).filter_by(chunk_id=chunk.id).first()
-                if record and record.model_name == model and record.text_hash == digest:
+                if (record and record.model_name == model and record.text_hash == digest 
+                    and record.vector and record.dimension == len(record.vector)
+                ):
                     skipped += 1
                     continue
                 pending.append((chunk, record, digest))
 
             vectors = embed_passages([chunk.text for chunk, _, _ in pending])
+            if len(vectors) != len(pending):
+                raise RuntimeError(
+                    "Embedding count does not match pending chunk count."
+                )
             for (chunk, record, digest), vector in zip(pending, vectors):
                 if record is None:
                     record = ChunkEmbedding(chunk_id=chunk.id)
@@ -151,13 +139,58 @@ def rebuild_case_embeddings(case_id: int, db: Session = Depends(get_db)):
                 record.text_hash = digest
             db.commit()
 
+        # Verify every current chunk has a valid embedding.
+        db.expire_all()
+
+        verified_chunks = (
+            db.query(Chunk)
+            .join(Chunk.document)
+            .filter(Chunk.document.has(case_id=case_id))
+            .all()
+        )
+
+        verified_ids = [chunk.id for chunk in verified_chunks]
+
+        verified_records = (
+            db.query(ChunkEmbedding)
+            .filter(
+                ChunkEmbedding.chunk_id.in_(verified_ids),
+                ChunkEmbedding.model_name == model,
+            )
+            .all()
+        ) if verified_ids else []
+
+        verified_by_chunk = {
+            record.chunk_id: record for record in verified_records
+        }
+
+        valid_count = 0
+
+        for chunk in verified_chunks:
+            record = verified_by_chunk.get(chunk.id)
+
+            if (
+                record
+                and record.text_hash == text_hash(chunk.text)
+                and record.vector
+                and record.dimension == len(record.vector)
+            ):
+                valid_count += 1
+
+        if valid_count != len(verified_chunks):
+            raise RuntimeError(
+                f"Embedding verification failed: "
+                f"{valid_count}/{len(verified_chunks)} chunks have valid embeddings."
+            )
+
         return {
             "case_id": case_id,
             "model": model,
-            "total_chunks": len(chunks),
+            "total_chunks": len(verified_chunks),
             "created": created,
             "updated": updated,
             "skipped_unchanged": skipped,
+            "verified_embeddings": valid_count,
             "status": "complete",
         }
     except Exception as exc:
@@ -186,7 +219,18 @@ def semantic_search(
         .all()
     )
 
-    if not records:
+    # Keep only embeddings that match the current chunk text.
+    valid_records = [
+        record
+        for record in records
+        if (
+            record.text_hash == text_hash(record.chunk.text)
+            and record.vector
+            and record.dimension == len(record.vector)
+        )
+    ]
+
+    if not valid_records:
         raise HTTPException(
             409,
             "This case has no embeddings. Run the rebuild endpoint first."
@@ -197,7 +241,7 @@ def semantic_search(
     ranked = sorted(
         (
             (cosine_similarity(query_vector, record.vector), record.chunk)
-            for record in records
+            for record in valid_records
         ),
         key=lambda item: item[0],
         reverse=True
@@ -234,162 +278,33 @@ def semantic_search(
 def hybrid_search(
     case_id: int,
     payload: HybridSearchRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    """
-    Experimental hybrid retrieval:
-    BM25 keyword search + E5 semantic search + RRF fusion.
-
-    Results are strictly scoped to the requested case.
-    """
-
-    # 1. Validate case
     if not db.get(Case, case_id):
         raise HTTPException(404, "Case not found")
 
-    # 2. Load chunks belonging only to this case
-    chunks = (
-        db.query(Chunk)
-        .join(Chunk.document)
-        .filter(Chunk.document.has(case_id=case_id))
-        .order_by(Chunk.id)
-        .all()
-    )
-
-    if not chunks:
-        raise HTTPException(
-            400,
-            "No chunks found. Process the case documents first."
-        )
-
-    # 3. Tokenize query and corpus
-    query_tokens = tokenize(payload.query)
-
-    if not query_tokens:
+    if not tokenize(payload.query):
         raise HTTPException(
             422,
-            "Query must contain searchable words or numbers."
+            "Query must contain searchable words or numbers.",
         )
 
-    tokenized_corpus = [
-        tokenize(chunk.text)
-        for chunk in chunks
-    ]
-
-    # Ignore chunks with no searchable tokens
-    valid_pairs = [
-        (chunk, tokens)
-        for chunk, tokens in zip(chunks, tokenized_corpus)
-        if tokens
-    ]
-
-    if not valid_pairs:
-        raise HTTPException(
-            400,
-            "No searchable text found in this case."
+    try:
+        result = hybrid_search_chunks(
+            db=db,
+            case_id=case_id,
+            query=payload.query,
+            limit=payload.limit,
         )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
-    # 4. BM25 retrieval
-    bm25 = BM25Okapi(
-        [tokens for _, tokens in valid_pairs]
-    )
-
-    bm25_scores = bm25.get_scores(query_tokens)
-
-    bm25_ranked = sorted(
-        [
-            {
-                "chunk": chunk,
-                "score": float(score)
-            }
-            for (chunk, _), score in zip(valid_pairs, bm25_scores)
-            if score > 0
-        ],
-        key=lambda item: item["score"],
-        reverse=True
-    )
-
-    # 5. Generate semantic candidates
-    # No 0.76 threshold here:
-    # semantic and BM25 scores are not comparable.
-    embedding_records = (
-        db.query(ChunkEmbedding)
-        .join(ChunkEmbedding.chunk)
-        .join(Chunk.document)
-        .filter(
-            Chunk.document.has(case_id=case_id),
-            ChunkEmbedding.model_name == model_name()
-        )
-        .all()
-    )
-
-    semantic_ranked = []
-
-    if embedding_records:
-        query_vector = embed_query(payload.query)
-
-        semantic_ranked = sorted(
-            [
-                {
-                    "chunk": record.chunk,
-                    "score": cosine_similarity(
-                        query_vector,
-                        record.vector
-                    )
-                }
-                for record in embedding_records
-            ],
-            key=lambda item: item["score"],
-            reverse=True
-        )
-
-    # 6. Limit candidate lists before fusion
-    candidate_limit = min(
-        len(chunks),
-        max(payload.limit * 3, 20)
-    )
-
-    semantic_candidates = [
-        {
-            "chunk": item["chunk"],
-            "score": item["score"],
-            "rank": rank
-        }
-        for rank, item in enumerate(
-            semantic_ranked[:candidate_limit],
-            start=1
-        )
-    ]
-
-    bm25_candidates = [
-        {
-            "chunk": item["chunk"],
-            "score": item["score"],
-            "rank": rank
-        }
-        for rank, item in enumerate(
-            bm25_ranked[:candidate_limit],
-            start=1
-        )
-    ]
-
-    # 7. Fuse rankings using RRF
-    fused_results = reciprocal_rank_fusion(
-        semantic_candidates,
-        bm25_candidates
-    )
-
-    final_results = fused_results[:payload.limit]
-
-    # 8. Return results with source information
     return {
-        "case_id": case_id,
-        "query": payload.query,
-        "retrieval_method": "hybrid_bm25_rrf",
-        "embedding_model": model_name(),
-        "total_case_chunks": len(chunks),
-        "semantic_candidates": len(semantic_candidates),
-        "bm25_candidates": len(bm25_candidates),
+        **{
+            key: value
+            for key, value in result.items()
+            if key != "results"
+        },
         "results": [
             {
                 "chunk_id": item["chunk"].id,
@@ -410,8 +325,8 @@ def hybrid_search(
                 "semantic_rank": item["semantic_rank"],
                 "bm25_rank": item["bm25_rank"],
                 "rrf_score": round(item["rrf_score"], 8),
-                "text": item["chunk"].text
+                "text": item["chunk"].text,
             }
-            for item in final_results
-        ]
+            for item in result["results"]
+        ],
     }
