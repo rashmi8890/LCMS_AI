@@ -8,3 +8,6 @@ PyMuPDF==1.25.5
 openai==1.75.0
 python-docx==1.1.2
 reportlab==4.2.5
+sentence-transformers>=3.4,<6
+numpy>=1.26
+rank-bm25

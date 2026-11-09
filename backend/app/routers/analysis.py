@@ -169,11 +169,22 @@ def analyse_case(case_id: int, db: Session = Depends(get_db)):
             party_text = str(raw.get("content", ""))
             if not party_text or not raw.get("evidence"):
                 continue
+            # applicant_match = re.search(
+            #     r"\bApplicant\s*[:\-]\s*([^.;\n]+)", party_text, re.IGNORECASE
+            # )
+            # respondent_match = re.search(
+            #     r"\bRespondent\s*[:\-]\s*([^.;\n]+)", party_text, re.IGNORECASE
+            # )
             applicant_match = re.search(
-                r"\bApplicant\s*[:\-]\s*([^.;\n]+)", party_text, re.IGNORECASE
+                r"(?:Applicant|आवेदक)\s*[:\-]\s*([^.;\n]+)",
+                party_text,
+                re.IGNORECASE
             )
+
             respondent_match = re.search(
-                r"\bRespondent\s*[:\-]\s*([^.;\n]+)", party_text, re.IGNORECASE
+                r"(?:Respondent|अनावेदक|प्रतिवादी)\s*[:\-]\s*([^.;\n]+)",
+                party_text,
+                re.IGNORECASE
             )
             if not case.applicant and applicant_match:
                 case.applicant = applicant_match.group(1).strip()[:300]

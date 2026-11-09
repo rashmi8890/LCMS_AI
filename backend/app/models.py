@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import String, Text, Integer, Float, Boolean, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import String, Text, Integer, Float, Boolean, DateTime, ForeignKey, UniqueConstraint, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .database import Base
 
@@ -53,6 +53,22 @@ class Chunk(Base):
     text: Mapped[str] = mapped_column(Text)
     document: Mapped["Document"] = relationship(back_populates="chunks")
     page: Mapped["DocumentPage"] = relationship()
+
+class ChunkEmbedding(Base):
+    __tablename__ = "chunk_embeddings"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    chunk_id: Mapped[int] = mapped_column(
+        ForeignKey("chunks.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    model_name: Mapped[str] = mapped_column(String(200), index=True)
+    dimension: Mapped[int] = mapped_column(Integer)
+    vector: Mapped[list[float]] = mapped_column(JSON)
+    text_hash: Mapped[str] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+    chunk: Mapped["Chunk"] = relationship()
 
 class AnalysisItem(Base):
     __tablename__ = "analysis_items"

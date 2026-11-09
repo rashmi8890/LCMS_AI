@@ -1,6 +1,212 @@
 import re
 from ..models import Case, Chunk
 from ..services.llm_service import ask_json
+import math
+import logging
+
+logger = logging.getLogger(__name__)
+
+CHARS_PER_TOKEN_ESTIMATE = 2.5
+MAX_REQUEST_TOKEN_BUDGET = 4000
+
+DEVANAGARI_RE = re.compile(r"[\u0900-\u097F]")
+LATIN_RE = re.compile(r"[A-Za-z]")
+
+
+def detect_case_language(chunks):
+    text = "\n".join(chunk.text or "" for chunk in chunks)
+
+    devanagari_count = len(DEVANAGARI_RE.findall(text))
+    latin_count = len(LATIN_RE.findall(text))
+
+    total = devanagari_count + latin_count
+
+    if total == 0:
+        return "English"
+
+    hindi_ratio = devanagari_count / total
+
+    if hindi_ratio >= 0.60:
+        return "Hindi"
+
+    if hindi_ratio <= 0.20:
+        return "English"
+
+    return "Bilingual"
+
+def estimate_tokens(text: str) -> int:
+    """Estimate tokens conservatively without requiring a tokenizer."""
+    if not text:
+        return 0
+
+    return math.ceil(len(text) / CHARS_PER_TOKEN_ESTIMATE)
+
+# def build_analysis_batches(
+#     chunks,
+#     system_prompt: str,
+#     metadata: str,
+#     max_tokens: int = MAX_REQUEST_TOKEN_BUDGET,
+# ):
+#     """
+#     Build deterministic batches based on estimated prompt token usage.
+#     Each chunk remains intact and retains its original source information.
+#     """
+#     batches = []
+#     current_batch = []
+
+#     base_prompt = (
+#         f"{metadata}\n\n"
+#         "DOCUMENT EXCERPTS (batch 1)\n"
+#     )
+
+#     base_tokens = (
+#         estimate_tokens(system_prompt)
+#         + estimate_tokens(base_prompt)
+#     )
+
+#     available_tokens = max_tokens - base_tokens
+
+#     if available_tokens <= 0:
+#         raise ValueError(
+#             "System prompt and case metadata exceed the batch token budget."
+#         )
+
+#     current_tokens = base_tokens
+
+#     for chunk in chunks:
+#         chunk_text = (
+#             f"[SOURCE chunk_id={chunk.id} "
+#             f"document={chunk.document.filename!r} "
+#             f"page={chunk.page_number}]\n"
+#             f"{chunk.text}"
+#         )
+
+#         chunk_tokens = estimate_tokens(chunk_text) + estimate_tokens("\n\n")
+
+#         if chunk_tokens > available_tokens:
+#             raise ValueError(
+#                 f"Chunk {chunk.id} is too large for the configured "
+#                 "analysis batch budget. Split this chunk before analysis."
+#             )
+
+#         if current_batch and current_tokens + chunk_tokens > max_tokens:
+#             batches.append(current_batch)
+#             current_batch = []
+#             current_tokens = base_tokens
+
+#         current_batch.append(chunk)
+#         current_tokens += chunk_tokens
+
+#     if current_batch:
+#         batches.append(current_batch)
+
+#     return batches
+
+ANALYSIS_USER_INSTRUCTIONS = (
+    "Extract every applicable category supported by these excerpts: "
+    "Executive Summary, Case Background, Facts, Issues, Parties, Evidence, "
+    "Contradictions, Unresolved Facts, Chronology, Law and Analysis. "
+    "Return each category only when these excerpts provide relevant support. "
+    "Every item must have at least one exact supporting quote from this batch."
+)
+
+
+def build_analysis_user_prompt(
+    metadata: str,
+    context: str,
+    batch_number: int,
+    total_batches: int,
+) -> str:
+    """Build the complete user prompt used for an analysis request."""
+    return (
+        f"{metadata}\n\n"
+        f"DOCUMENT EXCERPTS (batch {batch_number}/{total_batches})\n"
+        f"{context}\n\n"
+        f"{ANALYSIS_USER_INSTRUCTIONS}"
+    )
+
+
+def _format_chunk_source(chunk) -> str:
+    """Format a chunk with its original source information."""
+    return (
+        f"[SOURCE chunk_id={chunk.id} "
+        f"document={chunk.document.filename!r} "
+        f"page={chunk.page_number}]\n"
+        f"{chunk.text}"
+    )
+
+
+def build_analysis_batches(
+    chunks,
+    system_prompt: str,
+    metadata: str,
+    max_tokens: int = MAX_REQUEST_TOKEN_BUDGET,
+):
+    """
+    Build deterministic batches using the estimated size of the complete
+    system and user prompts.
+
+    Each chunk remains intact and retains its original source information.
+    """
+    batches = []
+    current_batch = []
+
+    # Use a deliberately long batch header while estimating. The actual
+    # batch numbers will normally be shorter, so this adds a small margin.
+    estimated_batch_number = 999999
+    estimated_total_batches = 999999
+
+    def estimate_batch_tokens(batch):
+        context = "\n\n".join(
+            _format_chunk_source(chunk) for chunk in batch
+        )
+
+        user_prompt = build_analysis_user_prompt(
+            metadata=metadata,
+            context=context,
+            batch_number=estimated_batch_number,
+            total_batches=estimated_total_batches,
+        )
+
+        return (
+            estimate_tokens(system_prompt)
+            + estimate_tokens(user_prompt)
+        )
+
+    for chunk in chunks:
+        candidate_batch = current_batch + [chunk]
+        candidate_tokens = estimate_batch_tokens(candidate_batch)
+
+        if candidate_tokens <= max_tokens:
+            current_batch = candidate_batch
+            continue
+
+        # If the current batch is empty, even this single chunk is too large.
+        if not current_batch:
+            raise ValueError(
+                f"Chunk {chunk.id} is too large for the configured "
+                f"analysis request budget of {max_tokens} estimated tokens. "
+                "Split this chunk before analysis."
+            )
+
+        # Finalize the existing batch and start a new one.
+        batches.append(current_batch)
+        current_batch = [chunk]
+
+        # Verify that the new batch can fit on its own.
+        single_chunk_tokens = estimate_batch_tokens(current_batch)
+
+        if single_chunk_tokens > max_tokens:
+            raise ValueError(
+                f"Chunk {chunk.id} is too large for the configured "
+                f"analysis request budget of {max_tokens} estimated tokens. "
+                "Split this chunk before analysis."
+            )
+
+    if current_batch:
+        batches.append(current_batch)
+
+    return batches
 
 def retrieve_case_chunks(db, case_id: int, query: str = "", limit: int | None = None):
     terms = [t.lower().strip(".,:;()[]{}") for t in query.split() if len(t) > 2]
@@ -199,28 +405,127 @@ def generate_analysis(db, case_id: int):
         "only if no supported findings exist. No Markdown or additional prose."
     )
 
+    analysis_language = detect_case_language(chunks)
+        
+    language_instruction = {
+        "Hindi": (
+            "LANGUAGE REQUIREMENT: Write all finding content, summaries, "
+            "explanations, legal analysis and relevance notes in Hindi "
+            "using Devanagari script. Preserve names, dates, amounts and "
+            "legal references accurately. Evidence quotations must remain "
+            "exactly as written in the source document."
+        ),
+        "English": (
+            "LANGUAGE REQUIREMENT: Write all finding content, summaries, "
+            "explanations and legal analysis in English. Evidence quotations "
+            "must remain exactly as written in the source document."
+        ),
+        "Bilingual": (
+            "LANGUAGE REQUIREMENT: Write explanations primarily in Hindi. "
+            "Preserve material English expressions and legal terms where "
+            "appropriate. Evidence quotations must remain exactly as written "
+            "in the source document."
+        ),
+    }[analysis_language]
+
+    system = system + "\n\n" + language_instruction
+
+    logger.info(
+        "Analysis language selected | case_id=%s | language=%s",
+        case_id,
+        analysis_language,
+    )
+
+    # all_items = []
+    # batch_size = 6
+    # for offset in range(0, len(chunks), batch_size):
+    #     batch = chunks[offset:offset + batch_size]
+    #     context = "\n\n".join(
+    #         f"[SOURCE chunk_id={c.id} document={c.document.filename!r} page={c.page_number}]\n{c.text}"
+    #         for c in batch
+    #     )
+    #     user = (
+    #         f"CASE METADATA\nCase number: {case.case_number}\nSubject: {case.subject}\n"
+    #         f"Act: {case.act}\nSections: {case.sections}\nApplicant: {case.applicant}\n"
+    #         f"Respondent: {case.respondent}\n\n"
+    #         f"DOCUMENT EXCERPTS (batch {offset // batch_size + 1})\n{context}\n\n"
+    #         "Extract every applicable category supported by these excerpts: Executive Summary, "
+    #         "Case Background, Facts, Issues, Parties, Evidence, Contradictions, "
+    #         "Unresolved Facts, Chronology, Law and Analysis. Return each category only "
+    #         "when these excerpts provide relevant support. Do not omit a supported category "
+    #         "merely because another category is easier to answer. Do not "
+    #         "fill a category with unrelated content. Every item must have at least one exact "
+    #         "supporting quote from this batch. Return one JSON object."
+    #     )
+    #     result = ask_json(system, user)
     all_items = []
-    batch_size = 6
-    for offset in range(0, len(chunks), batch_size):
-        batch = chunks[offset:offset + batch_size]
+
+    metadata = (
+        f"CASE METADATA\n"
+        f"Case number: {case.case_number}\n"
+        f"Subject: {case.subject}\n"
+        f"Act: {case.act}\n"
+        f"Sections: {case.sections}\n"
+        f"Applicant: {case.applicant}\n"
+        f"Respondent: {case.respondent}"
+    )
+
+    batches = build_analysis_batches(
+        chunks=chunks,
+        system_prompt=system,
+        metadata=metadata,
+    )
+
+    logger.info(
+        "Case analysis batching | case_id=%s | chunks=%d | batches=%d",
+        case_id,
+        len(chunks),
+        len(batches),
+    )
+
+    for batch_number, batch in enumerate(batches, start=1):
+
+        # context = "\n\n".join(
+        #     f"[SOURCE chunk_id={c.id} "
+        #     f"document={c.document.filename!r} "
+        #     f"page={c.page_number}]\n{c.text}"
+        #     for c in batch
+        # )
+
+        # user = (
+        #     f"{metadata}\n\n"
+        #     f"DOCUMENT EXCERPTS (batch {batch_number}/{len(batches)})\n"
+        #     f"{context}\n\n"
+        #     "Extract every applicable category supported by these excerpts: "
+        #     "Executive Summary, Case Background, Facts, Issues, Parties, Evidence, "
+        #     "Contradictions, Unresolved Facts, Chronology, Law and Analysis. "
+        #     "Return each category only when these excerpts provide relevant support. "
+        #     "Every item must have at least one exact supporting quote from this batch."
+        # )
         context = "\n\n".join(
-            f"[SOURCE chunk_id={c.id} document={c.document.filename!r} page={c.page_number}]\n{c.text}"
-            for c in batch
+            _format_chunk_source(chunk)
+            for chunk in batch
         )
-        user = (
-            f"CASE METADATA\nCase number: {case.case_number}\nSubject: {case.subject}\n"
-            f"Act: {case.act}\nSections: {case.sections}\nApplicant: {case.applicant}\n"
-            f"Respondent: {case.respondent}\n\n"
-            f"DOCUMENT EXCERPTS (batch {offset // batch_size + 1})\n{context}\n\n"
-            "Extract every applicable category supported by these excerpts: Executive Summary, "
-            "Case Background, Facts, Issues, Parties, Evidence, Contradictions, "
-            "Unresolved Facts, Chronology, Law and Analysis. Return each category only "
-            "when these excerpts provide relevant support. Do not omit a supported category "
-            "merely because another category is easier to answer. Do not "
-            "fill a category with unrelated content. Every item must have at least one exact "
-            "supporting quote from this batch. Return one JSON object."
+
+        user = build_analysis_user_prompt(
+            metadata=metadata,
+            context=context,
+            batch_number=batch_number,
+            total_batches=len(batches),
         )
+
+        logger.info(
+            "Processing analysis batch | case_id=%s | batch=%d/%d | "
+            "chunks=%d | estimated_prompt_tokens=%d",
+            case_id,
+            batch_number,
+            len(batches),
+            len(batch),
+            estimate_tokens(system) + estimate_tokens(user),
+        )
+
         result = ask_json(system, user)
+
         if not isinstance(result, dict) or not isinstance(result.get("items"), list):
             raise RuntimeError("LLM JSON must contain an items array.")
         for item in result["items"]:

@@ -62,15 +62,17 @@ def _create_completion(client, messages, *, json_mode: bool):
         "model": settings.llm_model,
         "messages": messages,
         "temperature": 0.1,
-        "max_completion_tokens": 3000,
+        "max_completion_tokens": 1800,
         "reasoning_effort": "low",
     }
     if json_mode:
         request["response_format"] = {"type": "json_object"}
     return client.chat.completions.create(**request)
 
+
 def ask_json(system_prompt: str, user_prompt: str):
     client = client_or_none()
+
     if client is None:
         raise RuntimeError(
             "LLM is not configured. Set LLM_API_KEY and LLM_MODEL in .env."
@@ -82,36 +84,64 @@ def ask_json(system_prompt: str, user_prompt: str):
     ]
 
     try:
-        response = _create_completion(client, messages, json_mode=True)
-        choices = getattr(response, "choices", None) or []
-        content = choices[0].message.content if choices else ""
-        if not content:
-            details = _response_details(response)
-            logger.error("LLM returned empty content in JSON mode: %s", details)
-            raise ValueError(f"The LLM returned an empty response ({details}).")
-        return _parse_json_object(content)
-
-    except Exception as first_error:
-        logger.warning(
-            "LLM JSON-mode attempt failed; trying once without JSON mode. "
-            "Error: %s: %s",
-            type(first_error).__name__,
-            str(first_error)[:700],
+        response = _create_completion(
+            client,
+            messages,
+            json_mode=True,
         )
 
-    try:
-        response = _create_completion(client, messages, json_mode=False)
         choices = getattr(response, "choices", None) or []
-        content = choices[0].message.content if choices else ""
-        if not content:
-            details = _response_details(response)
-            logger.error("LLM returned empty content in fallback mode: %s", details)
-            raise ValueError(f"The LLM returned an empty response ({details}).")
-        return _parse_json_object(content)
 
-    except Exception as retry_error:
-        logger.exception("LLM JSON fallback attempt failed.")
+        if not choices:
+            raise RuntimeError("LLM returned no completion choices.")
+
+        choice = choices[0]
+        content = choice.message.content or ""
+        finish_reason = getattr(choice, "finish_reason", None)
+
+        logger.info(
+            "LLM response | finish_reason=%s | content_length=%s",
+            finish_reason,
+            len(content),
+        )
+
+        if not content.strip():
+            raise ValueError(
+                f"LLM returned empty content. "
+                f"finish_reason={finish_reason}"
+            )
+
+        try:
+            return _parse_json_object(content)
+
+        except json.JSONDecodeError as exc:
+            # Log a small diagnostic excerpt, not the entire legal document.
+            start = max(0, exc.pos - 100)
+            end = min(len(content), exc.pos + 100)
+            excerpt = content[start:end]
+
+            logger.error(
+                "Invalid LLM JSON | line=%s | column=%s | "
+                "position=%s | finish_reason=%s | excerpt=%r",
+                exc.lineno,
+                exc.colno,
+                exc.pos,
+                finish_reason,
+                excerpt,
+            )
+
+            raise RuntimeError(
+                "LLM returned malformed JSON. "
+                f"Line={exc.lineno}, column={exc.colno}, "
+                f"finish_reason={finish_reason}. "
+                "See backend logs for the response excerpt."
+            ) from exc
+
+    except RuntimeError:
+        raise
+
+    except Exception as exc:
+        logger.exception("LLM JSON generation request failed.")
         raise RuntimeError(
-            "LLM JSON generation failed after the JSON-mode fallback "
-            f"({type(retry_error).__name__}): {retry_error}"
-        ) from retry_error
+            f"LLM request failed ({type(exc).__name__}): {exc}"
+        ) from exc

@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .database import Base, engine
 from .config import settings
-from .routers import cases, documents, analysis, notesheets
+from .routers import cases, documents, analysis, notesheets,embeddings
 
 Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
 Path(settings.export_dir).mkdir(parents=True, exist_ok=True)
@@ -15,7 +15,7 @@ app.include_router(cases.router)
 app.include_router(documents.router)
 app.include_router(analysis.router)
 app.include_router(notesheets.router)
-
+app.include_router(embeddings.router)
 @app.get("/")
 def root(): return {"name":"LCMS API","version":"0.2.0","docs":"/docs"}
 @app.get("/health")
